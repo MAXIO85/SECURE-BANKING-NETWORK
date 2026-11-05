@@ -1,13 +1,14 @@
 "use strict";
 
 const API = window.location.protocol === "file:"
-    ? "http://localhost:3001/api"
+    ? "http://localhost:3000/api"
     : "/api";
 
-async function getAPI(endpoint) {
-    const response = await fetch(`${API}${endpoint}`);
+async function getAPI(endpoint, options) {
+    const response = await fetch(`${API}${endpoint}`, options);
     if (!response.ok) {
-        throw new Error(`API error: ${response.status}`);
+        const error = await response.json();
+        throw new Error(error.message || `API error: ${response.status}`);
     }
     return response.json();
 }
@@ -25,7 +26,7 @@ function setStatusChip(element, value) {
 
     if (/^verified$/i.test(status)) {
         element.classList.add("status-verified");
-    } else if (/not configured|pending/i.test(status)) {
+    } else if (/not configured|not live-tested|pending/i.test(status)) {
         element.classList.add("status-pending");
     } else if (/verification failed|unavailable|failed|offline|error/i.test(status)) {
         element.classList.add("status-offline");
@@ -35,7 +36,7 @@ function setStatusChip(element, value) {
 }
 
 function formatLabel(value) {
-    const acronyms = new Set(["acl", "dhcp", "dns", "id", "ip", "nat", "ospf", "ssh", "vlan", "vpn", "wan"]);
+    const acronyms = new Set(["acl", "dhcp", "dns", "id", "ip", "nat", "ssh", "vlan", "vpn", "wan"]);
     return value
         .replace(/([a-z])([A-Z])/g, "$1 $2")
         .split(" ")
@@ -43,6 +44,139 @@ function formatLabel(value) {
             ? word.toUpperCase()
             : `${word.charAt(0).toUpperCase()}${word.slice(1)}`)
         .join(" ");
+}
+
+function setText(id, value, fallback = "Not reported in project files") {
+    const element = document.getElementById(id);
+    if (element) element.textContent = value === null || value === undefined || value === ""
+        ? fallback
+        : String(value);
+}
+
+function renderNetwork(data) {
+    const headOffice = data.headquarters;
+    const branch = data.branch;
+    const branchVlan = data.vlans.find(vlan => vlan.site === "Branch Office");
+    const headOfficeVlans = data.vlans.filter(vlan => vlan.site === "Head Office");
+    const routing = data.interSiteRouting;
+
+    document.getElementById("summarySites").textContent = String(data.sites.length).padStart(2, "0");
+    document.getElementById("summaryVlans").textContent = String(data.vlans.length).padStart(2, "0");
+    document.getElementById("summaryServers").textContent = String(data.servers.length).padStart(2, "0");
+    setText("summarySitesNote", data.sites.map(site => site.name).join(" + "), "No sites listed in project files");
+    setText("summaryVlansNote", data.vlans.length
+        ? `VLAN IDs ${data.vlans.map(vlan => vlan.id).join(" · ")}`
+        : "", "No VLANs listed in project files");
+    const serverRoles = [...new Set(data.servers.map(server => server.role).filter(Boolean))];
+    setText("summaryServersNote", serverRoles.join(" · "), "Server roles not reported in project files");
+    setText("projectName", data.project?.name, "Project name not reported by the API");
+    setText("projectSites", data.sites.map(site => site.name).join(" · "), "No sites listed in project files");
+    setText("hqRouterName", headOffice.router);
+    setText("hqRouterIp", headOffice.ipAddress);
+    setText("branchRouterName", branch.router);
+    setText("branchRouterIp", branch.ipAddress);
+    setText("topologyHqRouter", headOffice.router);
+    setText("topologyHqIp", headOffice.ipAddress);
+    setText("topologyHqVlans", headOfficeVlans.map(vlan => vlan.id).join(" · "));
+    setText("topologyWan", `Inter-site WAN · ${routing.wanNetwork || "network not documented"}`);
+    setText("topologyBranchRouter", branch.router);
+    setText("topologyBranchIp", branch.ipAddress);
+    setText("topologyBranchNetwork", branchVlan?.network);
+    setText("topologyBranchGateway", branchVlan?.gateway);
+    setText("serverNetworkLabel", data.vlans.find(vlan => vlan.id === data.servers[0]?.vlanId)
+        ? `Server network · VLAN ${data.servers[0].vlanId}`
+        : "Server network not identified in project files");
+
+    document.getElementById("interSiteRoutingStatus").textContent = routing.status;
+    setStatusChip(document.getElementById("hqStatus"), headOffice.status);
+    setStatusChip(document.getElementById("branchStatus"), branch.status);
+    renderRouting(routing);
+    renderProjectSources(data.project?.sourceFiles);
+}
+
+function renderRouting(routing) {
+    if (!Array.isArray(routing.endpoints) || !routing.evidence || !routing.status) {
+        throw new Error("Incomplete inter-site routing information received from the project API");
+    }
+
+    const container = document.getElementById("routingDetails");
+    const summary = document.createElement("article");
+    summary.className = "routing-card routing-summary";
+    const heading = document.createElement("div");
+    heading.className = "routing-card-heading";
+    const title = document.createElement("h3");
+    title.textContent = "WAN link";
+    const status = document.createElement("span");
+    status.className = "status-chip";
+    setStatusChip(status, routing.status);
+    heading.append(title, status);
+    const network = document.createElement("p");
+    network.className = "routing-network";
+    network.textContent = `WAN network: ${routing.wanNetwork || "Not documented in project files"}`;
+    const evidence = document.createElement("p");
+    evidence.className = "routing-evidence";
+    evidence.textContent = `Connectivity evidence: ${routing.evidence.status || "No status reported"}${routing.evidence.details ? ` — ${routing.evidence.details}` : ""}`;
+    summary.append(heading, network, evidence);
+
+    const endpoints = document.createElement("div");
+    endpoints.className = "routing-endpoints";
+    routing.endpoints.forEach(endpoint => {
+        const card = document.createElement("article");
+        card.className = "routing-endpoint";
+        const site = document.createElement("span");
+        site.className = "routing-endpoint-site";
+        site.textContent = endpoint.site || "Site not identified";
+        const router = document.createElement("h3");
+        router.textContent = endpoint.router || "Router not identified";
+        const address = document.createElement("p");
+        address.textContent = `WAN address: ${endpoint.ipAddress || "Not identified in project exports"}`;
+        card.append(site, router, address);
+        endpoints.append(card);
+    });
+    container.replaceChildren(summary, endpoints);
+}
+
+function renderProjectSources(files) {
+    if (!Array.isArray(files)) {
+        throw new Error("Project source file inventory is missing from the network API response");
+    }
+    const list = document.getElementById("projectSources");
+    if (files.length === 0) {
+        list.replaceChildren();
+        const empty = document.createElement("li");
+        empty.className = "resource-empty";
+        empty.textContent = "No source files were reported by the project API.";
+        list.append(empty);
+        return;
+    }
+
+    const documentedFiles = new Set([
+        "PROJECT-OVERVIEW.txt",
+        "IP-ADDRESSING.txt",
+        "NETWORK-TESTING-RESULTS.txt"
+    ]);
+    list.replaceChildren(...files.map(file => {
+        const item = document.createElement("li");
+        item.className = "resource-item";
+        const name = document.createElement("span");
+        name.className = "resource-name";
+        name.textContent = file;
+        item.append(name);
+
+        if (documentedFiles.has(file)) {
+            const link = document.createElement("a");
+            link.className = "resource-link";
+            link.href = `documentation.html?file=${encodeURIComponent(file)}`;
+            link.textContent = "Read source document ↗";
+            item.append(link);
+        } else {
+            const label = document.createElement("span");
+            label.className = "resource-kind";
+            label.textContent = "Device configuration source";
+            item.append(label);
+        }
+        return item;
+    }));
 }
 
 function navigateToDetails(type, id) {
@@ -104,19 +238,28 @@ async function loadOverview() {
 
     try {
         const data = await getAPI("/network");
-        setStatusChip(statusElements[0], data.headquarters?.status || "Information unavailable");
-        setStatusChip(statusElements[1], data.branch?.status || "Information unavailable");
-        document.getElementById("ospfStatus").textContent =
-            data.routing?.status || "Information unavailable";
-        setStatusChip(document.getElementById("routingStatus"), data.routing?.protocol || "Unavailable");
+        if (!data.headquarters || !data.branch || !data.interSiteRouting || !Array.isArray(data.vlans) ||
+            !Array.isArray(data.servers) || !Array.isArray(data.sites)) {
+            throw new Error("Incomplete project inventory received from the API");
+        }
+        renderNetwork(data);
         apiStatus.textContent = "Connected";
         const indicator = document.getElementById("apiIndicator");
         if (indicator) indicator.classList.add("is-online");
     } catch (error) {
         statusElements.forEach(element => setStatusChip(element, "Unavailable"));
-        document.getElementById("ospfStatus").textContent = "Unavailable";
-        setStatusChip(document.getElementById("routingStatus"), "Unavailable");
-        apiStatus.textContent = "API unavailable";
+        document.getElementById("interSiteRoutingStatus").textContent = "Unavailable";
+        document.getElementById("routingDetails").textContent =
+            `Routing information is unavailable: ${error.message}`;
+        document.getElementById("projectSources").textContent =
+            `Project source inventory is unavailable: ${error.message}`;
+        ["summarySites", "summaryVlans", "summaryServers"].forEach(id => setText(id, "—"));
+        ["summarySitesNote", "summaryVlansNote", "summaryServersNote"].forEach(id =>
+            setText(id, "", `Unavailable: ${error.message}`)
+        );
+        setText("projectName", "", `Unavailable: ${error.message}`);
+        setText("projectSites", "", `Unavailable: ${error.message}`);
+        apiStatus.textContent = `API unavailable: ${error.message}`;
         const indicator = document.getElementById("apiIndicator");
         if (indicator) indicator.classList.remove("is-online");
         console.error("Network overview could not be loaded:", error);
@@ -138,7 +281,7 @@ async function loadVLANs() {
         table.replaceChildren(...vlans.map(createVlanRow));
         status.textContent = `${vlans.length} VLAN network${vlans.length === 1 ? "" : "s"} · Select a row to view details.`;
     } catch (error) {
-        cards.textContent = "VLAN information is unavailable. Check the project API and try again.";
+        cards.textContent = `VLAN information is unavailable: ${error.message}`;
         const row = document.createElement("tr");
         const cell = document.createElement("td");
         cell.colSpan = 5;
@@ -146,7 +289,7 @@ async function loadVLANs() {
         cell.textContent = "Unable to load network and gateway addresses.";
         row.appendChild(cell);
         table.replaceChildren(row);
-        status.textContent = "Check that the backend is running, then refresh this page.";
+        status.textContent = `Unable to load VLANs: ${error.message}`;
         console.error("VLAN information could not be loaded:", error);
     }
 }
@@ -176,7 +319,7 @@ async function loadServers() {
             heading.textContent = server.name;
             const role = document.createElement("p");
             role.className = "server-role";
-            role.textContent = server.role;
+            role.textContent = server.role || "Host configuration is not included in the exported project files";
             const meta = document.createElement("div");
             meta.className = "site-meta";
             const label = document.createElement("span");
@@ -188,7 +331,7 @@ async function loadServers() {
             return card;
         }));
     } catch (error) {
-        container.textContent = "Server information is unavailable. Check the project API and try again.";
+        container.textContent = `Server information is unavailable: ${error.message}`;
         console.error("Server information could not be loaded:", error);
     }
 }
@@ -200,6 +343,9 @@ function renderSecurity(report) {
 
     const container = document.getElementById("securityCards");
     container.replaceChildren(...Object.entries(report.features).map(([name, result]) => {
+        if (!["Verified", "Not Configured", "Verification Failed"].includes(result.status)) {
+            throw new Error(`Invalid ${name} verification status received from the project API`);
+        }
         const card = document.createElement("a");
         card.className = "security-card";
         card.href = `details.html?type=security&id=${encodeURIComponent(name)}`;
@@ -221,8 +367,8 @@ async function loadSecurity() {
     try {
         renderSecurity(await getAPI("/security"));
     } catch (error) {
-        container.textContent = "Security verification failed. Current feature statuses are unavailable.";
-        document.getElementById("securityUpdated").textContent = "Verification unavailable";
+        container.textContent = `Security verification failed: ${error.message}`;
+        document.getElementById("securityUpdated").textContent = `Verification unavailable: ${error.message}`;
         console.error("Security information could not be loaded:", error);
     }
 }
@@ -235,15 +381,10 @@ async function refreshSecurity() {
     label.textContent = "Verifying…";
 
     try {
-        const response = await fetch(`${API}/security/verify`, { method: "POST" });
-        if (!response.ok) {
-            throw new Error(`API error: ${response.status}`);
-        }
-        renderSecurity(await response.json());
+        renderSecurity(await getAPI("/security/verify", { method: "POST" }));
     } catch (error) {
-        document.getElementById("securityCards").textContent =
-            "Security verification failed. Previous statuses are no longer current.";
-        document.getElementById("securityUpdated").textContent = "Verification failed";
+        document.getElementById("securityCards").textContent = `Security verification failed: ${error.message}`;
+        document.getElementById("securityUpdated").textContent = `Verification failed: ${error.message}`;
         console.error("Security verification could not be refreshed:", error);
     } finally {
         button.disabled = false;
@@ -260,55 +401,51 @@ async function runTool(tool, button) {
     try {
         let text;
         switch (tool) {
-            case "routing": {
-                const [routing, connectivity, vlans] = await Promise.all([
-                    getAPI("/routing"),
-                    getAPI("/connectivity"),
-                    getAPI("/vlans")
-                ]);
-                if (!routing || !connectivity?.headquarters || !connectivity?.branch || !Array.isArray(vlans)) {
-                    throw new Error("Incomplete OSPF information received from the project API");
+            case "interSiteRouting": {
+                const data = await getAPI("/connectivity");
+                const routing = data.interSiteRouting;
+                if (!routing || !Array.isArray(routing.endpoints)) {
+                    throw new Error("Incomplete inter-site routing information received from the project API");
                 }
-
-                const documentedNetworks = [
-                    ...vlans.map(vlan => vlan.network),
-                    routing.wanNetwork
-                ].filter(Boolean);
                 text = [
-                    "OSPF CONFIGURATION",
-                    `Protocol: ${routing.protocol || "Not reported"}`,
-                    `Status: ${routing.status || "Not reported"}`,
-                    `WAN network: ${routing.wanNetwork || "Not reported"}`,
-                    "",
-                    "ROUTING & NEIGHBOR STATUS",
-                    `${connectivity.headquarters.router || "Head Office"}: ${connectivity.headquarters.ipAddress || "IP not reported"}`,
-                    `${connectivity.branch.router || "Branch Office"}: ${connectivity.branch.ipAddress || "IP not reported"}`,
-                    `OSPF adjacency: Not reported by project API`,
-                    `Reported site connectivity: Head Office ${connectivity.headquarters.status || "Not reported"} · Branch ${connectivity.branch.status || "Not reported"}`,
-                    "",
-                    "ROUTER IDs",
-                    "Head Office: Not reported by project API",
-                    "Branch Office: Not reported by project API",
-                    "",
-                    "NETWORK ADVERTISEMENTS",
-                    "Advertised prefixes: Not reported by project API",
-                    `Documented network prefixes (advertisement not confirmed): ${documentedNetworks.join(", ") || "None reported"}`
+                    `Status: ${routing.status}`,
+                    `WAN network: ${routing.wanNetwork || "Not documented"}`,
+                    ...routing.endpoints.map(endpoint =>
+                        `${endpoint.site} · ${endpoint.router}: ${endpoint.ipAddress || "WAN interface not identified"}`
+                    ),
+                    `Inter-site connectivity evidence: ${routing.evidence.status} — ${routing.evidence.details || "No test report details"}`
                 ].join("\n");
                 break;
             }
             case "services": {
                 const data = await getAPI("/services");
-                text = `DHCP: ${data.dhcp} · DNS: ${data.dns} · Inter-VLAN routing: ${data.interVlanRouting} · Branch connectivity: ${data.branchConnectivity}`;
+                text = [
+                    `DHCP: ${data.dhcp.status}; relay target(s): ${data.dhcp.serverAddresses.join(", ") || "none found"}`,
+                    `DHCP test evidence: ${data.dhcp.evidence.status} — ${data.dhcp.evidence.details || "No test report details"}`,
+                    `DNS: ${data.dns.status}; records: ${data.dns.records.join(", ") || "none documented"}`,
+                    `DNS test evidence: ${data.dns.evidence.status} — ${data.dns.evidence.details || "No test report details"}`,
+                    `Inter-VLAN routing: ${data.interVlanRouting.status}; ${data.interVlanRouting.evidence.status}`,
+                    `Branch connectivity evidence: ${data.branchConnectivity.status} — ${data.branchConnectivity.details || "No test report details"}`,
+                    `Customer Wi-Fi evidence: ${data.customerWifi.status} — ${data.customerWifi.details || "No test report details"}`
+                ].join("\n");
                 break;
             }
             case "connectivity": {
                 const data = await getAPI("/connectivity");
-                text = `Head Office (${data.headquarters?.ipAddress || "unavailable"}): ${data.headquarters?.status || "unavailable"} · Branch (${data.branch?.ipAddress || "unavailable"}): ${data.branch?.status || "unavailable"} · Routing: ${data.routing?.status || "unavailable"}`;
+                text = [
+                    `${data.headquarters.router} (${data.headquarters.ipAddress}): ${data.headquarters.status}`,
+                    `${data.branch.router} (${data.branch.ipAddress}): ${data.branch.status}`,
+                    `Inter-site routing: ${data.interSiteRouting.status}`,
+                    `Inter-site connectivity evidence: ${data.evidence.status} — ${data.evidence.details || "No test report details"}`
+                ].join("\n");
                 break;
             }
             case "health": {
                 const data = await getAPI("/health");
-                text = data.message || "Backend health check completed.";
+                if (data.database !== "connected") {
+                    throw new Error("The verification database is not healthy");
+                }
+                text = data.message;
                 break;
             }
             default:

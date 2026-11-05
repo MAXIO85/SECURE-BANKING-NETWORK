@@ -6,9 +6,19 @@ const cors = require("cors");
 const fs = require("fs");
 const { DatabaseSync } = require("node:sqlite");
 const { verifySecurityFeatures } = require("./security-verification");
+const { loadProjectData, loadProjectDocuments } = require("./project-data");
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
+const allowedOrigins = new Set([
+    `http://localhost:${PORT}`,
+    `http://127.0.0.1:${PORT}`,
+    "null",
+    ...(process.env.API_ALLOWED_ORIGINS || "")
+        .split(",")
+        .map(origin => origin.trim())
+        .filter(Boolean)
+]);
 const SECURITY_DATABASE_PATH = path.resolve(
     process.env.SECURITY_DATABASE_PATH ||
     path.join(__dirname, "security-verifications.sqlite")
@@ -20,7 +30,11 @@ const DASHBOARD_PATH = path.join(
 );
 
 // Middleware
-app.use(cors());
+app.use(cors({
+    origin: (origin, callback) => {
+        callback(null, !origin || allowedOrigins.has(origin));
+    }
+}));
 app.use(express.json());
 
 fs.mkdirSync(path.dirname(SECURITY_DATABASE_PATH), { recursive: true });
@@ -72,139 +86,145 @@ async function runAndSaveSecurityVerification() {
     return saveSecurityVerification(await verifySecurityFeatures());
 }
 
-// Network information
-const networkData = {
-    project: "Secure Banking Network Infrastructure",
-    status: "Online",
-
-    headquarters: {
-        name: "Head Office",
-        router: "R1-HQ",
-        ipAddress: "10.255.0.1",
-        status: "Connectivity Tested",
-        location: "Headquarters"
-    },
-
-    branch: {
-        name: "Branch Office",
-        router: "R2-BRANCH",
-        ipAddress: "10.255.0.2",
-        status: "Connectivity Tested",
-        location: "Branch"
-    },
-
-    vlans: [
-        {
-            id: 10,
-            name: "ATM Network",
-            network: "10.10.10.0/24",
-            gateway: "10.10.10.1"
-        },
-        {
-            id: 20,
-            name: "Banking Counter",
-            network: "10.10.20.0/24",
-            gateway: "10.10.20.1"
-        },
-        {
-            id: 30,
-            name: "Banking Server",
-            network: "10.10.30.0/24",
-            gateway: "10.10.30.1"
-        },
-        {
-            id: 40,
-            name: "Management",
-            network: "10.10.40.0/24",
-            gateway: "10.10.40.1"
-        },
-        {
-            id: 50,
-            name: "Customer Wi-Fi",
-            network: "10.10.50.0/24",
-            gateway: "10.10.50.1"
-        },
-        {
-            id: 60,
-            name: "Branch Network",
-            network: "10.10.60.0/24",
-            gateway: "10.10.60.1"
-        },
-        {
-            id: 99,
-            name: "Network Management",
-            network: "10.10.99.0/24",
-            gateway: "10.10.99.1"
-        }
-    ],
-
-    servers: [
-        {
-            name: "BANK-SERVER",
-            ipAddress: "10.10.30.10",
-            role: "Banking Application Server",
-            status: "Configured"
-        },
-        {
-            name: "DHCP-DNS-SERVER",
-            ipAddress: "10.10.30.11",
-            role: "DHCP and DNS Server",
-            status: "Configured"
-        },
-        {
-            name: "WEB-SERVER",
-            ipAddress: "10.10.30.12",
-            role: "Web Server",
-            status: "Configured"
-        }
-    ],
-
-    routing: {
-        protocol: "OSPF",
-        status: "Configured",
-        wanNetwork: "10.255.0.0/30"
-    },
-
-    services: {
-        dhcp: "Configured",
-        dns: "Configured",
-        interVlanRouting: "Configured",
-        branchConnectivity: "Tested"
-    }
-
-};
-
-// API: Complete network information
-app.get("/api/network", async (req, res, next) => {
+// Serve only the project's user-facing documentation; device exports remain private.
+app.get("/api/documents", async (req, res, next) => {
     try {
-        const securityReport = await runAndSaveSecurityVerification();
+        const documents = await loadProjectDocuments();
         res.json({
-            ...networkData,
-            security: securityReport.features
+            documents: documents.map(({ name, content }) => ({
+                name,
+                content,
+                downloadUrl: `/api/documents/${encodeURIComponent(name)}?download=1`
+            }))
         });
     } catch (error) {
         next(error);
     }
 });
 
+app.get("/api/documents/:name", async (req, res, next) => {
+    try {
+        const documents = await loadProjectDocuments();
+        const document = documents.find(item => item.name === req.params.name);
+        if (!document) {
+            return res.status(404).json({
+                success: false,
+                message: "Project document not found"
+            });
+        }
+
+        const disposition = req.query.download === "1" ? "attachment" : "inline";
+        res.type("text/plain").set("Content-Disposition", `${disposition}; filename="${document.name}"`)
+            .send(document.content);
+    } catch (error) {
+        next(error);
+    }
+});
+
+// API: Complete network information
+app.get("/api/network", async (req, res, next) => {
+    try {
+        res.json(await loadProjectData());
+    } catch (error) {
+        next(error);
+    }
+});
+
 // API: Head Office
-app.get("/api/headquarters", (req, res) => {
-    res.json(networkData.headquarters);
+app.get("/api/headquarters", async (req, res, next) => {
+    try {
+        res.json((await loadProjectData()).headquarters);
+    } catch (error) {
+        next(error);
+    }
 });
 
 // API: Branch Office
-app.get("/api/branch", (req, res) => {
-    res.json(networkData.branch);
+app.get("/api/branch", async (req, res, next) => {
+    try {
+        res.json((await loadProjectData()).branch);
+    } catch (error) {
+        next(error);
+    }
 });
 
 // API: VLAN information
-app.get("/api/vlans", (req, res) => {
-    res.json(networkData.vlans);
+app.get("/api/vlans", async (req, res, next) => {
+    try {
+        res.json((await loadProjectData()).vlans);
+    } catch (error) {
+        next(error);
+    }
+});
+
+app.get("/api/vlans/:id", async (req, res, next) => {
+    try {
+        const vlan = (await loadProjectData()).vlans.find(item => item.id === Number(req.params.id));
+        if (!vlan) {
+            return res.status(404).json({ success: false, message: "VLAN not found in the project addressing plan" });
+        }
+        res.json(vlan);
+    } catch (error) {
+        next(error);
+    }
 });
 
 // API: Server information
-app.get("/api/servers", (req, res) => {
-    res.json(networkData.servers);
+app.get("/api/servers", async (req, res, next) => {
+    try {
+        res.json((await loadProjectData()).servers);
+    } catch (error) {
+        next(error);
+    }
+});
+
+app.get("/api/servers/:name", async (req, res, next) => {
+    try {
+        const server = (await loadProjectData()).servers.find(
+            item => item.name.toLowerCase() === req.params.name.toLowerCase()
+        );
+        if (!server) {
+            return res.status(404).json({ success: false, message: "Server not found in the project addressing plan" });
+        }
+        res.json(server);
+    } catch (error) {
+        next(error);
+    }
+});
+
+// API: Parsed configuration details, with credentials and raw device exports excluded
+app.get("/api/configuration", async (req, res, next) => {
+    try {
+        res.json((await loadProjectData()).security);
+    } catch (error) {
+        next(error);
+    }
+});
+
+app.get("/api/configuration/:feature", async (req, res, next) => {
+    try {
+        const data = await loadProjectData();
+        const feature = req.params.feature.toLowerCase();
+        const configuration = {
+            acl: { accessLists: data.security.accessLists },
+            nat: data.security.nat,
+            vpn: data.security.vpn,
+            ssh: {
+                devices: data.security.devices.map(device => ({
+                    name: device.name,
+                    ssh: device.ssh
+                }))
+            },
+            vlan: { vlans: data.vlans },
+        }[feature];
+
+        if (!configuration) {
+            return res.status(404).json({ success: false, message: "Configuration feature not found" });
+        }
+        res.json({ feature, source: data.sources, configuration });
+    } catch (error) {
+        next(error);
+    }
 });
 
 // API: Latest security verification, refreshed against the current device exports
@@ -264,29 +284,34 @@ app.get("/api/security/:feature", async (req, res, next) => {
 });
 
 // API: Network services
-app.get("/api/services", (req, res) => {
-    res.json(networkData.services);
-});
-
-// API: Routing information
-app.get("/api/routing", (req, res) => {
-    res.json(networkData.routing);
+app.get("/api/services", async (req, res, next) => {
+    try {
+        res.json((await loadProjectData()).services);
+    } catch (error) {
+        next(error);
+    }
 });
 
 // API: Connectivity
-app.get("/api/connectivity", (req, res) => {
-    res.json({
-        headquarters: networkData.headquarters,
-        branch: networkData.branch,
-        routing: networkData.routing
-    });
+app.get("/api/connectivity", async (req, res, next) => {
+    try {
+        res.json((await loadProjectData()).connectivity);
+    } catch (error) {
+        next(error);
+    }
 });
 
 // API: Health check
 app.get("/api/health", (req, res) => {
+    const databaseCheck = securityDatabase.prepare("SELECT 1 AS ok").get();
+    if (databaseCheck?.ok !== 1) {
+        throw new Error("Security verification database health check failed");
+    }
+
     res.json({
         success: true,
-        message: "Backend API is working successfully",
+        message: "Backend API and verification database are healthy",
+        database: "connected",
         timestamp: new Date().toISOString()
     });
 });
@@ -318,9 +343,9 @@ app.use((req, res) => {
 app.use((err, req, res, next) => {
     console.error(err);
 
-    res.status(500).json({
+    res.status(err.statusCode || 500).json({
         success: false,
-        message: "Internal server error"
+        message: err.statusCode === 503 ? err.message : "Internal server error"
     });
 });
 

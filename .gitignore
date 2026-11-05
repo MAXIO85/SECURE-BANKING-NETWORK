@@ -1,0 +1,4 @@
+backend/node_modules/
+backend/security-verifications.sqlite
+backend/security-verifications.sqlite-shm
+backend/security-verifications.sqlite-wal

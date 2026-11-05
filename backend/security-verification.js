@@ -70,6 +70,26 @@ function parseInterfaceBlocks(configuration) {
     return blocks;
 }
 
+function parseLineBlocks(configuration, lineType) {
+    const blocks = [];
+    let current = null;
+    const headingPattern = new RegExp(`^\\s*line\\s+${lineType}\\b`, "i");
+
+    for (const rawLine of configuration.split(/\r?\n/)) {
+        const line = rawLine.trim();
+        if (headingPattern.test(line)) {
+            current = { name: line, lines: [] };
+            blocks.push(current);
+        } else if (/^(?:line\s|!|end\b)/i.test(line)) {
+            current = null;
+        } else if (current && line) {
+            current.lines.push(line);
+        }
+    }
+
+    return blocks;
+}
+
 function maskFromPrefix(prefix) {
     const bits = Number(prefix);
     if (!Number.isInteger(bits) || bits < 0 || bits > 32) return null;
@@ -133,19 +153,35 @@ function missingConfigurationFeature(name, source) {
     );
 }
 
+function getTestSection(testResults, heading) {
+    if (!testResults) return "";
+    const lines = testResults.split(/\r?\n/);
+    const start = lines.findIndex(line => {
+        const match = line.match(/^\s*\d+\.\s*(.*?)\s*$/);
+        return match && match[1].toLowerCase() === heading.toLowerCase();
+    });
+    if (start < 0) return "";
+    const end = lines.findIndex((line, index) => index > start && /^\s*\d+\.\s/.test(line));
+    return lines.slice(start + 1, end < 0 ? lines.length : end).join("\n");
+}
+
+function successfulEvidence(text) {
+    return /\b(?:tested\s+successfully|verification\s+passed|verified)\b/i.test(text) &&
+        !/\b(?:not|never|failed|incomplete|require(?:s|d)?\s+further|still\s+require)\b/i.test(text);
+}
+
 function featureTestPending(testResults, featurePattern) {
     if (!testResults) return true;
-    const securitySection = testResults.match(/8\.\s*SECURITY FEATURES([\s\S]*)/i)?.[1] || "";
+    const securitySection = getTestSection(testResults, "SECURITY FEATURES");
     return featurePattern.test(securitySection) &&
         /(?:require\s+further|still\s+require)\s+configuration\s+and\s+testing/i.test(securitySection);
 }
 
 function featureTestPassed(testResults, featurePattern) {
     if (!testResults) return false;
-    const securitySection = testResults.match(/8\.\s*SECURITY FEATURES([\s\S]*)/i)?.[1] || "";
+    const securitySection = getTestSection(testResults, "SECURITY FEATURES");
     return securitySection.split(/\r?\n/).some(line =>
-        featurePattern.test(line) &&
-        /tested\s+successfully|verification\s+passed|verified/i.test(line)
+        featurePattern.test(line) && successfulEvidence(line)
     );
 }
 
@@ -232,9 +268,11 @@ function evaluateVlan(plan, devices, testResults, source) {
     ));
 
     const listedVlanIds = plan.map(vlan => String(vlan.id));
-    const configuredTest = /VLANs?\s+[\d,\s]+(?:and\s+\d+)?\s+configured/i.test(testResults) &&
-        listedVlanIds.every(id => new RegExp(`\\b${id}\\b`).test(testResults));
-    const interVlanTest = /INTER-VLAN ROUTING[\s\S]{0,180}tested successfully/i.test(testResults);
+    const vlanTestSection = getTestSection(testResults, "VLAN CONFIGURATION");
+    const interVlanTestSection = getTestSection(testResults, "INTER-VLAN ROUTING");
+    const configuredTest = /VLANs?\s+[\d,\s]+(?:and\s+\d+)?\s+configured/i.test(vlanTestSection) &&
+        listedVlanIds.every(id => new RegExp(`\\b${id}\\b`).test(vlanTestSection));
+    const interVlanTest = successfulEvidence(interVlanTestSection);
     checks.push(makeCheck(
         "Project VLAN and inter-VLAN test evidence",
         configuredTest && interVlanTest,
@@ -269,28 +307,46 @@ function evaluateAcl(devices, testResults, source) {
     );
 
     if (definitions.length === 0) {
-        return makeFeature("Not Configured", "No ACL definitions were found in the supplied device configurations.", [
-            makeCheck("ACL definitions", false, "No standard or extended ACL definitions were found.", source.deviceFiles, true)
-        ]);
+        const hasOrphanBindings = bindings.length > 0;
+        return makeFeature(
+            hasOrphanBindings ? "Verification Failed" : "Not Configured",
+            hasOrphanBindings
+                ? "ACL interface bindings were found, but no matching ACL definitions exist."
+                : "No ACL definitions were found in the supplied device configurations.",
+            [
+                makeCheck(
+                    "ACL definitions",
+                    false,
+                    hasOrphanBindings
+                        ? `No ACL definitions were found for ${bindings.map(binding => binding.name).join(", ")}.`
+                        : "No standard or extended ACL definitions were found.",
+                    source.deviceFiles,
+                    !hasOrphanBindings
+                )
+            ]
+        );
     }
 
+    const definedNames = new Set(definitions.map(definition => definition.name.toLowerCase()));
     const appliedNames = [...new Set(bindings.map(binding => binding.name))];
+    const allDefinitionsValid = definitions.every(definition => definition.rules.length > 0);
     const allDefinedApplied = definitions.every(definition =>
-        appliedNames.includes(definition.name) && definition.rules.length > 0
+        appliedNames.some(name => name.toLowerCase() === definition.name.toLowerCase())
     );
+    const allBindingsDefined = bindings.every(binding => definedNames.has(binding.name.toLowerCase()));
     const tested = featureTestPassed(testResults, /\bACL\b/i);
     const pending = featureTestPending(testResults, /\bACL\b/i);
     const checks = [
-        makeCheck("ACL definitions and rules", definitions.every(definition => definition.rules.length > 0),
+        makeCheck("ACL definitions and rules", allDefinitionsValid,
             definitions.map(definition =>
                 `${definition.name} on ${definition.file}: ${definition.rules.length} permit/deny rules`
             ).join("; "),
             source.deviceFiles),
-        makeCheck("ACL interface bindings", allDefinedApplied,
+        makeCheck("ACL interface bindings", allDefinedApplied && allBindingsDefined,
             appliedNames.length
                 ? bindings.map(binding =>
                     `${binding.name} on ${binding.file} ${binding.interface} (${binding.direction})`
-                ).join("; ")
+                ).join("; ") + (allBindingsDefined ? "" : "; one or more bindings reference an undefined ACL")
                 : "No ip access-group bindings were found.",
             source.deviceFiles),
         makeCheck("ACL policy testing", tested,
@@ -299,9 +355,10 @@ function evaluateAcl(devices, testResults, source) {
                     "The project test report does not confirm successful ACL testing.",
             "NETWORK-TESTING-RESULTS.txt")
     ];
-    const status = allDefinedApplied && tested ? "Verified" : "Verification Failed";
+    const configured = allDefinitionsValid && allDefinedApplied && allBindingsDefined;
+    const status = configured && tested ? "Verified" : "Verification Failed";
     return makeFeature(status,
-        `${definitions.length} ACL definitions and ${bindings.length} interface bindings were found; policy validation ${tested ? "is reported as successful" : "is not reported as successful"}.`,
+        `${definitions.length} ACL definitions and ${bindings.length} interface bindings were found; configuration ${configured ? "is consistent" : "has errors"} and policy validation ${tested ? "is reported as successful" : "is not reported as successful"}.`,
         checks);
 }
 
@@ -310,17 +367,25 @@ function evaluateSsh(devices, testResults, source) {
         const hasVersion2 = /^\s*ip ssh version 2\s*$/im.test(configuration);
         const hasDomain = /^\s*ip domain-name\s+\S+/im.test(configuration);
         const hasLocalUser = /^\s*username\s+\S+\s+(?:privilege\s+\d+\s+)?(?:secret|password)\s+/im.test(configuration);
-        const hasVtySsh = /line vty[\s\S]*?transport input ssh/im.test(configuration);
-        const hasLocalLogin = /line vty[\s\S]*?login local/im.test(configuration);
+        const vtyBlocks = parseLineBlocks(configuration, "vty");
+        const hasVtySsh = vtyBlocks.length > 0 &&
+            vtyBlocks.every(block => block.lines.some(line => /^transport input ssh$/i.test(line)));
+        const hasLocalLogin = vtyBlocks.length > 0 &&
+            vtyBlocks.every(block => block.lines.some(line => /^login local$/i.test(line)));
+        const anySshConfiguration = hasVersion2 || hasDomain || hasLocalUser || vtyBlocks.some(block =>
+            block.lines.some(line => /^(?:transport input|login)\b/i.test(line))
+        );
         return {
             file,
             configured: hasVersion2 && hasDomain && hasLocalUser && hasVtySsh && hasLocalLogin,
+            anySshConfiguration,
             details: `SSH v2: ${hasVersion2 ? "present" : "missing"}; domain: ${hasDomain ? "present" : "missing"}; local user: ${hasLocalUser ? "present" : "missing"}; VTY restricted to SSH: ${hasVtySsh ? "yes" : "no"}; local VTY login: ${hasLocalLogin ? "yes" : "no"}.`
         };
     });
     const configuredCount = deviceResults.filter(result => result.configured).length;
+    const anySshConfiguration = deviceResults.some(result => result.anySshConfiguration);
 
-    if (configuredCount === 0) {
+    if (!anySshConfiguration) {
         return makeFeature("Not Configured", "SSH management configuration was not found on the supplied devices.", [
             makeCheck("SSH management configuration", false, "No device passed the SSH v2 and VTY checks.", source.deviceFiles, true)
         ]);
@@ -348,35 +413,168 @@ function evaluateSsh(devices, testResults, source) {
         checks);
 }
 
-function evaluateAbsentFeature(feature, devices, testResults, source) {
-    const configurations = Object.values(devices);
-    const found = configurations.some(configuration => feature.pattern.test(configuration));
-    const documentedPending = featureTestPending(testResults, feature.testPattern);
+function evaluateNat(devices, testResults, source) {
+    const allNatCommands = Object.entries(devices).flatMap(([file, configuration]) =>
+        configuration.split(/\r?\n/)
+            .map(line => line.trim())
+            .filter(line => /^ip nat\b/i.test(line))
+            .map(command => ({ file, command }))
+    );
+    const translationRules = allNatCommands.filter(item => /^ip nat inside source\b/i.test(item.command));
+    const pools = new Set(allNatCommands.flatMap(({ command }) =>
+        command.match(/^ip nat pool\s+(\S+)/i)?.[1] ?? []
+    ));
+    const accessListNames = new Set(Object.values(devices).flatMap(configuration => [
+        ...parseAclDefinitions(configuration).map(definition => definition.name.toLowerCase()),
+        ...[...configuration.matchAll(/^\s*access-list\s+(\S+)/gim)].map(match => match[1].toLowerCase())
+    ]));
+    const interfaces = Object.entries(devices).flatMap(([file, configuration]) =>
+        parseInterfaceBlocks(configuration).flatMap(block => block.lines.flatMap(line =>
+            /^\s*ip nat\s+(inside|outside)\s*$/i.test(line)
+                ? [{ file, interface: block.name, direction: line.match(/^ip nat\s+(inside|outside)/i)[1].toLowerCase() }]
+                : []
+        ))
+    );
+    const pending = featureTestPending(testResults, /\bNAT\b/i);
 
-    if (!found && documentedPending) {
-        return makeFeature("Not Configured", `${feature.label} commands were not found, and the project test report says configuration/testing is still required.`, [
-            makeCheck(`${feature.label} configuration`, false, `No ${feature.label} configuration commands were found in the supplied device exports.`, source.deviceFiles, true),
-            makeCheck(`${feature.label} test evidence`, false, "The project test report lists this feature as still requiring configuration and testing.", "NETWORK-TESTING-RESULTS.txt", true)
+    if (allNatCommands.length === 0 && interfaces.length === 0) {
+        return makeFeature("Not Configured", pending
+            ? "No NAT commands were found, and the project test report says NAT configuration and testing remain incomplete."
+            : "No NAT commands were found in the supplied device configurations.", [
+            makeCheck("NAT configuration", false, "No ip nat commands were found.", source.deviceFiles, true),
+            ...(pending ? [makeCheck(
+                "NAT testing",
+                false,
+                "The project test report says NAT configuration and testing remain incomplete.",
+                "NETWORK-TESTING-RESULTS.txt",
+                true
+            )] : [])
         ]);
     }
 
-    if (!found) {
-        return makeFeature("Not Configured", `No ${feature.label} configuration commands were found in the supplied device configurations.`, [
-            makeCheck(`${feature.label} configuration`, false, `No ${feature.label} configuration commands were found.`, source.deviceFiles, true)
-        ]);
-    }
+    const hasInside = interfaces.some(item => item.direction === "inside");
+    const hasOutside = interfaces.some(item => item.direction === "outside");
+    const supportedRules = translationRules.map(({ file, command }) => {
+        const dynamic = command.match(/^ip nat inside source list\s+(\S+)\s+(interface\s+\S+|pool\s+\S+)(?:\s+overload)?$/i);
+        const staticMapping = command.match(/^ip nat inside source static\s+(\S+)\s+(\S+)$/i);
+        const valid = Boolean(dynamic || staticMapping);
+        let detail = valid ? "recognized inside-source translation rule" : "unsupported or incomplete NAT rule syntax";
 
-    const tested = featureTestPassed(testResults, feature.testPattern);
-    const status = tested ? "Verified" : "Verification Failed";
+        if (dynamic) {
+            const aclName = dynamic[1].toLowerCase();
+            if (!accessListNames.has(aclName)) {
+                detail += `; referenced access list ${dynamic[1]} is not defined`;
+            }
+            if (dynamic[2].toLowerCase().startsWith("interface ")) {
+                const interfaceName = dynamic[2].slice("interface ".length);
+                if (!interfaces.some(item => item.interface.toLowerCase() === interfaceName.toLowerCase() &&
+                    item.direction === "outside")) {
+                    detail += `; referenced interface ${interfaceName} is not marked ip nat outside`;
+                }
+            }
+            if (dynamic[2].toLowerCase().startsWith("pool ")) {
+                const poolName = dynamic[2].slice("pool ".length);
+                if (!pools.has(poolName)) {
+                    detail += `; NAT pool ${poolName} is not defined`;
+                }
+            }
+        }
+
+        return { file, command, valid: valid && !detail.includes(";"), detail };
+    });
+    const rulesValid = translationRules.length > 0 && supportedRules.every(rule => rule.valid);
+    const interfacesValid = hasInside && hasOutside;
+    const tested = featureTestPassed(testResults, /\bNAT\b/i);
+    const checks = [
+        makeCheck("NAT inside/outside interfaces", interfacesValid,
+            `Inside interface: ${hasInside ? "present" : "missing"}; outside interface: ${hasOutside ? "present" : "missing"}.`,
+            [...new Set(interfaces.map(item => item.file))]),
+        makeCheck("NAT translation rules", rulesValid,
+            supportedRules.length
+                ? supportedRules.map(rule => `${rule.file}: ${rule.command} (${rule.detail})`).join("; ")
+                : `${pools.size} pool definition(s) found; no inside-source translation rule was found.`,
+            allNatCommands.map(item => item.file)),
+        makeCheck("NAT policy testing", tested,
+            tested ? "The project test report confirms NAT verification." :
+                pending ? "The project test report says NAT configuration and testing remain incomplete." :
+                    "The project test report does not confirm successful NAT testing.",
+            "NETWORK-TESTING-RESULTS.txt")
+    ];
+    const status = interfacesValid && rulesValid && tested ? "Verified" : "Verification Failed";
     return makeFeature(status,
-        tested ? `${feature.label} commands were found and successful testing is documented.` :
-            `${feature.label} commands were found, but successful testing is not documented.`,
-        [
-            makeCheck(`${feature.label} configuration`, true, `${feature.label} configuration commands were found.`, source.deviceFiles),
-            makeCheck(`${feature.label} testing`, tested,
-                tested ? "The project test report confirms verification." : "The project test report does not confirm successful testing.",
-                "NETWORK-TESTING-RESULTS.txt")
+        `${allNatCommands.length} NAT commands and ${translationRules.length} translation rules were found; interface roles ${interfacesValid ? "are present" : "are incomplete"}, translation rules ${rulesValid ? "are valid" : "need verification"}, and testing ${tested ? "is verified" : "is not verified"}.`,
+        checks);
+}
+
+function evaluateVpn(devices, testResults, source) {
+    const configurations = Object.entries(devices).map(([file, configuration]) => ({
+        file,
+        configuration,
+        interfaces: parseInterfaceBlocks(configuration),
+        commands: configuration.split(/\r?\n/).map(line => line.trim()).filter(line =>
+            /^(?:crypto\s+(?:isakmp|ikev\d*|ipsec|map)\b|tunnel protection ipsec profile\b)/i.test(line)
+        )
+    }));
+    const commandCount = configurations.reduce((total, item) => total + item.commands.length, 0);
+    const pending = featureTestPending(testResults, /\bVPN\b/i);
+
+    if (commandCount === 0) {
+        return makeFeature("Not Configured", pending
+            ? "No VPN commands were found, and the project test report says VPN configuration and testing remain incomplete."
+            : "No VPN commands were found in the supplied device configurations.", [
+            makeCheck("VPN configuration", false, "No IPsec, crypto map, or tunnel protection commands were found.", source.deviceFiles, true),
+            ...(pending ? [makeCheck(
+                "VPN testing",
+                false,
+                "The project test report says VPN configuration and testing remain incomplete.",
+                "NETWORK-TESTING-RESULTS.txt",
+                true
+            )] : [])
         ]);
+    }
+
+    const checksByDevice = configurations.filter(item => item.commands.length > 0).map(item => {
+        const hasPolicy = /^\s*crypto\s+isakmp\s+policy\b/im.test(item.configuration) ||
+            /^\s*crypto\s+ikev\d*\s+policy\b/im.test(item.configuration);
+        const hasTransform = /^\s*crypto\s+ipsec\s+transform-set\b/im.test(item.configuration);
+        const cryptoMaps = [...item.configuration.matchAll(/^\s*crypto\s+map\s+(\S+)\s+\S+\s+ipsec-isakmp\s*$/gim)]
+            .map(match => match[1]);
+        const hasMapOnInterface = item.interfaces.some(block => block.lines.some(line =>
+            /^crypto map\s+\S+/i.test(line)
+        ));
+        const hasTunnelProtection = item.interfaces.some(block => block.lines.some(line =>
+            /^tunnel protection ipsec profile\s+\S+/i.test(line)
+        ));
+        const hasPeer = /^\s*set peer\s+\S+/im.test(item.configuration);
+        const hasMapTransform = /^\s*set transform-set\s+\S+/im.test(item.configuration);
+        const hasMapAcl = /^\s*match address\s+\S+/im.test(item.configuration);
+        const hasCompleteMap = cryptoMaps.length > 0 && hasMapOnInterface && hasPeer && hasMapTransform && hasMapAcl;
+        const hasCompleteTunnel = hasTunnelProtection &&
+            /^\s*crypto\s+ipsec\s+profile\s+\S+/im.test(item.configuration) &&
+            hasTransform;
+        const complete = hasPolicy && hasTransform && (hasCompleteMap || hasCompleteTunnel);
+        return {
+            file: item.file,
+            complete,
+            details: `IKE policy: ${hasPolicy ? "present" : "missing"}; transform set: ${hasTransform ? "present" : "missing"}; crypto map applied: ${hasCompleteMap ? "yes" : "no"}; IPsec tunnel protection: ${hasCompleteTunnel ? "yes" : "no"}.`
+        };
+    });
+    const configurationValid = checksByDevice.length > 0 && checksByDevice.every(item => item.complete);
+    const tested = featureTestPassed(testResults, /\bVPN\b/i);
+    const checks = [
+        makeCheck("VPN policy and interface binding", configurationValid,
+            checksByDevice.map(item => `${item.file}: ${item.details}`).join("; "),
+            checksByDevice.map(item => item.file)),
+        makeCheck("VPN connectivity testing", tested,
+            tested ? "The project test report confirms VPN verification." :
+                pending ? "The project test report says VPN configuration and testing remain incomplete." :
+                    "The project test report does not confirm successful VPN testing.",
+            "NETWORK-TESTING-RESULTS.txt")
+    ];
+    const status = configurationValid && tested ? "Verified" : "Verification Failed";
+    return makeFeature(status,
+        `${commandCount} VPN commands were found; policy and interface binding ${configurationValid ? "are complete" : "are incomplete"}, and testing ${tested ? "is verified" : "is not verified"}.`,
+        checks);
 }
 
 async function verifySecurityFeatures() {
@@ -400,23 +598,15 @@ async function verifySecurityFeatures() {
     const completeDevices = missingDevices.length === 0;
     const devices = Object.fromEntries(deviceEntries.map(([file, content]) => [file, content || ""]));
     const plan = parseAddressingPlan(addressingPlan);
-    const featureInputsAvailable = completeDevices && addressingPlan !== null && testResults !== null;
+    const featureInputsAvailable = completeDevices;
 
     const features = featureInputsAvailable
         ? {
             vlan: evaluateVlan(plan, devices, securityEvidence, source),
             acl: evaluateAcl(devices, securityEvidence, source),
             ssh: evaluateSsh(devices, securityEvidence, source),
-            nat: evaluateAbsentFeature({
-                label: "NAT",
-                pattern: /^\s*ip nat\s+(?:inside|outside|source|pool)\b/im,
-                testPattern: /\bNAT\b/i
-            }, devices, securityEvidence, source),
-            vpn: evaluateAbsentFeature({
-                label: "VPN",
-                pattern: /^\s*(?:crypto\s+(?:isakmp|ikev\d*|ipsec|map)\b|tunnel protection ipsec profile\b)/im,
-                testPattern: /\bVPN\b/i
-            }, devices, securityEvidence, source)
+            nat: evaluateNat(devices, securityEvidence, source),
+            vpn: evaluateVpn(devices, securityEvidence, source)
         }
         : Object.fromEntries(["vlan", "acl", "ssh", "nat", "vpn"].map(feature => [
             feature,
