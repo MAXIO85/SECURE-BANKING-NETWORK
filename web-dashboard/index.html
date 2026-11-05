@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#080d16">
+    <meta name="description" content="Secure Banking Network Infrastructure dashboard for the Cisco Packet Tracer 9.0 project.">
+    <title>Secure Banking Network | Infrastructure Dashboard</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="script.js" defer></script>
+</head>
+<body>
+    <header class="site-header">
+        <a class="brand" href="#overview" aria-label="Secure Banking Network home">
+            <span class="brand-mark" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none"><path d="M12 3 4.5 6v5.3c0 4.4 3.2 7.7 7.5 9.7 4.3-2 7.5-5.3 7.5-9.7V6L12 3Z" stroke="currentColor" stroke-width="1.7"/><path d="m9 12 2 2 4-4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </span>
+            <span class="brand-copy"><strong>SECURE BANKING</strong><small>NETWORK INFRASTRUCTURE</small></span>
+        </a>
+        <nav class="main-nav" aria-label="Main navigation">
+            <a href="#overview">Overview</a>
+            <a href="#topology">Topology</a>
+            <a href="#vlans">VLANs &amp; IPs</a>
+            <a href="#servers">Servers</a>
+            <a href="#security">Security</a>
+        </nav>
+        <div class="header-project"><span class="pulse-dot" aria-hidden="true"></span>CISCO PACKET TRACER 9.0</div>
+    </header>
+
+    <main>
+        <section class="hero" id="overview">
+            <div class="hero-copy">
+                <p class="eyebrow"><span class="eyebrow-line"></span>NETWORK INFRASTRUCTURE MONITORING</p>
+                <h1>Secure Banking<br><span>Network</span></h1>
+                <p class="hero-description">A connected head office and branch office, organized into dedicated network segments and routed over an OSPF WAN.</p>
+                <div class="hero-actions">
+                    <a class="button button-primary" href="#topology">Explore network <span aria-hidden="true">↓</span></a>
+                    <a class="button button-quiet" href="#vlans">View IP configuration</a>
+                </div>
+            </div>
+            <div class="hero-visual" aria-hidden="true">
+                <div class="orbit orbit-one"></div>
+                <div class="orbit orbit-two"></div>
+                <div class="hero-shield">
+                    <svg viewBox="0 0 120 120" fill="none"><path d="M60 11 22 26v28c0 25 16 43 38 55 22-12 38-30 38-55V26L60 11Z" stroke="currentColor" stroke-width="2"/><path d="M60 31v51M40 43h40M40 63h40M60 82l-16 9M60 82l16 9" stroke="currentColor" stroke-width="1.5"/><circle cx="60" cy="43" r="4" fill="currentColor"/><circle cx="44" cy="63" r="4" fill="currentColor"/><circle cx="76" cy="63" r="4" fill="currentColor"/><circle cx="60" cy="82" r="4" fill="currentColor"/></svg>
+                </div>
+                <span class="visual-tag tag-top">HQ ↔ BRANCH</span>
+                <span class="visual-tag tag-bottom">OSPF · WAN</span>
+            </div>
+        </section>
+
+        <section class="overview-grid" aria-label="Network summary">
+            <a class="summary-card" href="#topology">
+                <span class="summary-icon" aria-hidden="true">⌂</span>
+                <span class="summary-label">SITES</span><strong>02</strong>
+                <span class="summary-note">Head office + branch</span>
+            </a>
+            <a class="summary-card" href="#vlans">
+                <span class="summary-icon" aria-hidden="true">▦</span>
+                <span class="summary-label">NETWORK SEGMENTS</span><strong>07</strong>
+                <span class="summary-note">VLANs 10–99</span>
+            </a>
+            <a class="summary-card" href="#servers">
+                <span class="summary-icon" aria-hidden="true">▤</span>
+                <span class="summary-label">SERVERS</span><strong>03</strong>
+                <span class="summary-note">Banking, DHCP / DNS, web</span>
+            </a>
+            <div class="summary-card summary-card-live">
+                <span class="summary-icon" aria-hidden="true">⌁</span>
+                <span class="summary-label">ROUTING</span><strong>OSPF</strong>
+                <span class="summary-note" id="ospfStatus">Loading routing status…</span>
+            </div>
+        </section>
+
+        <section class="section-block" aria-labelledby="sites-heading">
+            <div class="section-heading">
+                <div><p class="eyebrow">NETWORK LOCATIONS</p><h2 id="sites-heading">Connected sites</h2></div>
+                <span class="section-aside"><span class="live-indicator" id="apiIndicator" aria-hidden="true"></span><span id="apiStatus">Checking API</span></span>
+            </div>
+            <div class="site-grid">
+                <a class="site-card" href="details.html?type=office&amp;id=hq">
+                    <div class="site-card-top"><span class="site-icon" aria-hidden="true">⌂</span><span class="site-code">SITE 01</span><span class="status-chip" id="hqStatus">Loading…</span></div>
+                    <h3>Head Office</h3><p class="site-router">Router <code>R1-HQ</code></p>
+                    <div class="site-meta"><span>Router IP</span><code>10.255.0.1</code></div>
+                    <span class="text-link">View site details <span aria-hidden="true">↗</span></span>
+                </a>
+                <a class="site-card" href="details.html?type=office&amp;id=branch">
+                    <div class="site-card-top"><span class="site-icon site-icon-purple" aria-hidden="true">⌂</span><span class="site-code">SITE 02</span><span class="status-chip" id="branchStatus">Loading…</span></div>
+                    <h3>Branch Office</h3><p class="site-router">Router <code>R2-BRANCH</code></p>
+                    <div class="site-meta"><span>Router IP</span><code>10.255.0.2</code></div>
+                    <span class="text-link">View site details <span aria-hidden="true">↗</span></span>
+                </a>
+                <a class="site-card wan-card" href="details.html?type=routing">
+                    <div class="site-card-top"><span class="site-icon site-icon-cyan" aria-hidden="true">⌁</span><span class="site-code">WAN LINK</span><span class="status-chip status-configured" id="routingStatus">OSPF</span></div>
+                    <h3>Inter-site routing</h3><p class="site-router">Open Shortest Path First</p>
+                    <div class="site-meta"><span>WAN network</span><code>10.255.0.0/30</code></div>
+                    <span class="text-link">View routing details <span aria-hidden="true">↗</span></span>
+                </a>
+            </div>
+        </section>
+
+        <section class="section-block" id="topology" aria-labelledby="topology-heading">
+            <div class="section-heading">
+                <div><p class="eyebrow">NETWORK MAP</p><h2 id="topology-heading">Topology &amp; connectivity</h2></div>
+                <span class="section-aside">Head Office <span class="separator">/</span> Branch Office</span>
+            </div>
+            <div class="topology-layout">
+                <figure class="topology-figure">
+                    <img src="images/Network-Topology.png" alt="Cisco Packet Tracer topology showing the ISP, head office router and network segments, branch router and branch network, and banking servers.">
+                    <figcaption>Secure Banking Network · Cisco Packet Tracer topology</figcaption>
+                </figure>
+                <div class="topology-facts">
+                    <div class="fact-card">
+                        <span class="fact-kicker">HEAD OFFICE</span><h3>R1-HQ</h3>
+                        <div class="fact-row"><span>Router IP</span><code>10.255.0.1</code></div>
+                        <div class="fact-row"><span>VLANs</span><code>10 · 20 · 30 · 40 · 50 · 99</code></div>
+                        <a href="details.html?type=office&amp;id=hq" class="text-link">Office details ↗</a>
+                    </div>
+                    <div class="topology-link"><span class="link-line" aria-hidden="true"></span><span class="link-label">OSPF · 10.255.0.0/30</span></div>
+                    <div class="fact-card">
+                        <span class="fact-kicker fact-purple">BRANCH OFFICE</span><h3>R2-BRANCH</h3>
+                        <div class="fact-row"><span>Router IP</span><code>10.255.0.2</code></div>
+                        <div class="fact-row"><span>Network</span><code>10.10.60.0/24</code></div>
+                        <div class="fact-row"><span>Gateway</span><code>10.10.60.1</code></div>
+                        <a href="details.html?type=office&amp;id=branch" class="text-link">Office details ↗</a>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section class="section-block" id="vlans" aria-labelledby="vlans-heading">
+            <div class="section-heading">
+                <div><p class="eyebrow">SEGMENTATION</p><h2 id="vlans-heading">VLANs &amp; IP configuration</h2></div>
+                <span class="section-aside">Select a row for VLAN details</span>
+            </div>
+            <div class="table-shell">
+                <div class="table-scroll">
+                    <table>
+                        <thead><tr><th scope="col">VLAN</th><th scope="col">Department</th><th scope="col">Network</th><th scope="col">Gateway</th><th scope="col"><span class="visually-hidden">Details</span></th></tr></thead>
+                        <tbody id="ipTable"><tr><td colspan="5" class="table-message">Loading network and gateway addresses…</td></tr></tbody>
+                    </table>
+                </div>
+                <p id="ipLoadStatus" class="table-status" role="status" aria-live="polite"></p>
+            </div>
+            <div class="vlan-cards" id="vlanCards" aria-label="VLAN summaries"><p class="loading-note">Loading VLAN information…</p></div>
+        </section>
+
+        <section class="section-block" id="servers" aria-labelledby="servers-heading">
+            <div class="section-heading">
+                <div><p class="eyebrow">APPLICATION INFRASTRUCTURE</p><h2 id="servers-heading">Banking server infrastructure</h2></div>
+                <span class="section-aside">Server network · VLAN 30</span>
+            </div>
+            <div class="server-grid" id="serverCards"><p class="loading-note">Loading server information…</p></div>
+        </section>
+
+        <section class="section-block" id="security" aria-labelledby="security-heading">
+            <div class="section-heading">
+                <div><p class="eyebrow">NETWORK CONTROLS</p><h2 id="security-heading">Security configuration</h2></div>
+                <span class="section-aside"><span id="securityUpdated">Loading verification…</span><button class="button button-outline" id="refreshSecurity" type="button"><span aria-hidden="true">↻</span><span class="button-label">Refresh verification</span></button></span>
+            </div>
+            <p class="status-explanation"><strong>Verified</strong> means configuration and test evidence passed. <strong>Not Configured</strong> means the configuration is absent. <strong>Verification Failed</strong> means evidence is incomplete or a check failed.</p>
+            <div class="security-grid" id="securityCards"><p class="loading-note">Loading security information…</p></div>
+        </section>
+
+        <section class="section-block tools-section" aria-labelledby="tools-heading">
+            <div class="section-heading">
+                <div><p class="eyebrow">LIVE PROJECT API</p><h2 id="tools-heading">Network information tools</h2></div>
+                <span class="section-aside">Checks query the configured project API</span>
+            </div>
+            <div class="tool-buttons">
+                <button class="button button-outline" data-tool="routing" type="button"><span aria-hidden="true">⌁</span> OSPF status</button>
+                <button class="button button-outline" data-tool="services" type="button"><span aria-hidden="true">▤</span> DHCP / DNS status</button>
+                <button class="button button-outline" data-tool="connectivity" type="button"><span aria-hidden="true">↔</span> Branch connectivity</button>
+                <button class="button button-outline" data-tool="health" type="button"><span aria-hidden="true">⌘</span> Backend health</button>
+            </div>
+            <p class="tool-result" id="message" role="status" aria-live="polite">Ready to check the project API.</p>
+        </section>
+
+        <section class="project-note" aria-label="Project information">
+            <div><p class="eyebrow">PROJECT PROFILE</p><h2>Secure Banking Network Infrastructure</h2></div>
+            <dl class="project-details">
+                <div><dt>Simulation</dt><dd>Cisco Packet Tracer 9.0</dd></div>
+                <div><dt>Frontend</dt><dd>HTML, CSS and JavaScript</dd></div>
+                <div><dt>Backend</dt><dd>Node.js and Express.js</dd></div>
+                <div><dt>Network</dt><dd>Head Office and Branch Office</dd></div>
+            </dl>
+        </section>
+    </main>
+
+    <footer class="site-footer">
+        <a class="brand footer-brand" href="#overview"><span class="brand-mark" aria-hidden="true">◆</span><span class="brand-copy"><strong>SECURE BANKING</strong><small>NETWORK INFRASTRUCTURE</small></span></a>
+        <p>Academic Network Simulation Project <span>·</span> Cisco Packet Tracer 9.0</p>
+        <a href="#overview" class="back-top">Back to top ↑</a>
+    </footer>
+</body>
+</html>
